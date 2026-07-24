@@ -68,6 +68,8 @@ class Cluster::PlacementGroupManager
   end
 
   private def group_count_for(instance_count : Int32) : Int32
+    return 0 if instance_count == 0
+
     (instance_count.to_f / MAX_SERVERS_PER_PLACEMENT_GROUP).ceil.to_i.clamp(1, Int32::MAX)
   end
 

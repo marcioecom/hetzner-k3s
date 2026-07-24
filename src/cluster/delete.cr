@@ -3,6 +3,7 @@ require "../hetzner/ssh_key/delete"
 require "../hetzner/firewall/delete"
 require "../hetzner/network/delete"
 require "../hetzner/instance/delete"
+require "../hetzner/instances_list"
 require "../hetzner/load_balancer/delete"
 require "../hetzner/placement_group/delete"
 require "./placement_group_manager"
@@ -30,6 +31,11 @@ class Cluster::Delete
   end
 
   def run
+    if settings.adopted_servers? || adopted_servers_exist?
+      STDERR.puts "Deletion is not supported for clusters containing adopted Hetzner servers. No resources were changed."
+      exit 1
+    end
+
     return delete_resources if force
 
     input = get_cluster_name_input
@@ -42,6 +48,15 @@ class Cluster::Delete
 
     delete_resources
     File.delete(settings.kubeconfig_path) if File.exists?(settings.kubeconfig_path)
+  end
+
+  private def adopted_servers_exist? : Bool
+    success, response = hetzner_client.get("/servers", {
+      :label_selector => "hetzner-k3s-adoption-cluster=#{settings.cluster_name}",
+    })
+    raise "Unable to verify whether the cluster contains adopted servers: #{response}" unless success
+
+    Hetzner::InstancesList.from_json(response).servers.any?
   end
 
   private def get_cluster_name_input
@@ -61,6 +76,10 @@ class Cluster::Delete
   end
 
   private def delete_resources
+    if settings.adopted_servers? || adopted_servers_exist?
+      raise "Deletion is not supported for clusters containing adopted Hetzner servers. No resources were changed."
+    end
+
     switch_to_context("#{settings.cluster_name}-master1", abort_on_error: false, request_timeout: 10, print_output: false)
 
     cleanup_external_nodes

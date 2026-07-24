@@ -27,28 +27,39 @@ class Kubernetes::Worker::Setup
     # Assert that first_master is not nil (it should always be present at this point)
     first_master_instance = first_master.not_nil!
     workers = [] of Hetzner::Instance
-    workers_ready_channel = Channel(Hetzner::Instance).new
+    workers_result_channel = Channel(Tuple(Hetzner::Instance?, Exception?)).new(worker_count)
     semaphore = Channel(Nil).new(10)
     mutex = Mutex.new
 
     worker_count.times do
       semaphore.send(nil)
       spawn do
-        worker = workers_installation_queue_channel.receive
-        mutex.synchronize { workers << worker }
+        worker = nil
+        error = nil
 
-        pool = @settings.worker_node_pools.find do |pool|
-          worker.name.split("-")[0..-2].join("-") =~ /^#{@settings.cluster_name.to_s}-.*pool-#{pool.name.to_s}$/
+        begin
+          worker = workers_installation_queue_channel.receive
+
+          pool = @settings.worker_node_pools.find do |pool|
+            worker.name.split("-")[0..-2].join("-") =~ /^#{@settings.cluster_name.to_s}-.*pool-#{pool.name.to_s}$/
+          end
+
+          deploy_to_worker(worker, pool, masters, first_master_instance)
+          mutex.synchronize { workers << worker }
+        rescue ex : Exception
+          error = ex
+        ensure
+          semaphore.receive
+          workers_result_channel.send({worker, error})
         end
-
-        deploy_to_worker(worker, pool, masters, first_master_instance)
-
-        semaphore.receive
-        workers_ready_channel.send(worker)
       end
     end
 
-    worker_count.times { workers_ready_channel.receive }
+    errors = worker_count.times.compact_map do
+      _, error = workers_result_channel.receive
+      error
+    end
+    raise errors.first unless errors.empty?
 
     wait_for_one_worker_to_be_ready(first_master_instance, workers.map(&.name))
 

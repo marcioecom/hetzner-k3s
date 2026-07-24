@@ -148,7 +148,9 @@ class Hetzner::Instance::Create
       ready = true
     end
 
-    instance
+    ready_instance = instance.not_nil!
+    ready_instance.selected_network_id = network.try(&.id)
+    ready_instance
   end
 
   private def powered_on?(instance)
@@ -180,7 +182,8 @@ class Hetzner::Instance::Create
   end
 
   private def needs_attaching_to_private_network?(instance)
-    private_network_enabled? && !instance.try(&.private_ip_address)
+    selected_network = network
+    private_network_enabled? && selected_network && !instance.attached_to_network?(selected_network.id)
   end
 
   private def power_on_instance(instance)
@@ -243,7 +246,7 @@ class Hetzner::Instance::Create
 
   private def initialize_instance(instance_name, internal_ip, external_ip)
     Hetzner::Instance.new(
-      id: Random::Secure.rand(Int32::MIN..Int32::MAX),
+      id: Random::Secure.rand(Int32::MIN..Int32::MAX).to_i64,
       status: "running",
       instance_name: instance_name,
       internal_ip: internal_ip,

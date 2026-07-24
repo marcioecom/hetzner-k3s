@@ -185,7 +185,7 @@ class Util::SSH
     return resolve_ip_host(instance) unless tailscale?
 
     tailscale_hostname = instance.tailscale_host(tailscale_hostname_suffix)
-    return tailscale_hostname if tailscale_peer_online?(tailscale_hostname)
+    return tailscale_hostname if tailscale_peer_online?(tailscale_hostname, instance.tailscale_ip)
 
     log_line "Waiting for #{tailscale_hostname} to register with Tailscale...", log_prefix: "Instance #{instance.name}"
     raise IO::Error.new("Tailscale peer #{tailscale_hostname} not yet online")
@@ -202,14 +202,18 @@ class Util::SSH
     host_ip_address
   end
 
-  private def tailscale_peer_online?(hostname : String) : Bool
+  private def tailscale_peer_online?(hostname : String, expected_ip : String?) : Bool
     status_output = `tailscale status --json 2>/dev/null`
     return false unless $?.success?
 
     json = JSON.parse(status_output)
     json["Peer"].as_h.each do |_key, peer|
       dns_name = peer["DNSName"]?.try &.as_s
-      next unless dns_name && dns_name.starts_with?(hostname)
+      next unless dns_name && dns_name.rstrip('.') == hostname.rstrip('.')
+      if expected_ip
+        peer_ips = peer["TailscaleIPs"]?.try(&.as_a).try(&.compact_map(&.as_s?)) || [] of String
+        next unless peer_ips.includes?(expected_ip)
+      end
       return peer["Online"]?.try(&.as_bool) == true
     end
     false

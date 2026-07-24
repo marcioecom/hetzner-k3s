@@ -74,6 +74,14 @@ class Configuration::Validators::CreateSettings
       settings: settings
     ).validate
 
+    existing_server_ids = settings.existing_server_ids
+    if existing_server_ids.uniq.size != existing_server_ids.size
+      errors << "existing_server_ids must be unique across all master and worker pools"
+    end
+    if existing_server_ids.any? && settings.networking.ssh.port != 22
+      errors << "Adopted servers currently require networking.ssh.port to be 22"
+    end
+
     Configuration::Validators::KubectlPresence.new(errors).validate
 
     Configuration::Validators::HelmPresence.new(errors).validate
