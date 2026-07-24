@@ -231,7 +231,7 @@ class Util::SSH
       )
     end
 
-    peer = find_tailscale_peer(json, hostname)
+    peer = find_tailscale_peer(json, hostname, instance.tailscale_ip)
 
     unless peer
       raise TailscaleNotReady.new(
@@ -249,7 +249,7 @@ class Util::SSH
     raise TailscaleError.new("Could not parse the output of `tailscale status --json`")
   end
 
-  private def find_tailscale_peer(json : JSON::Any, hostname : String) : JSON::Any?
+  private def find_tailscale_peer(json : JSON::Any, hostname : String, expected_ip : String? = nil) : JSON::Any?
     peers = json["Peer"]?.try(&.as_h?)
     return nil unless peers
 
@@ -257,7 +257,13 @@ class Util::SSH
       dns_name = peer["DNSName"]?.try(&.as_s?)
       next unless dns_name
       # Tailscale reports MagicDNS names with a trailing dot.
-      return peer if dns_name.chomp(".") == hostname
+      next unless dns_name.chomp(".") == hostname
+      # An adopted server can share a MagicDNS name with a stale machine that is still in the tailnet.
+      if expected_ip
+        peer_ips = peer["TailscaleIPs"]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String
+        next unless peer_ips.includes?(expected_ip)
+      end
+      return peer
     end
 
     nil

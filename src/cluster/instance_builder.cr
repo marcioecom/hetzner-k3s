@@ -1,11 +1,13 @@
 require "../hetzner/instance/create"
+require "../hetzner/instance/adopt"
+require "../hetzner/instance/provisioner"
 require "./placement_group_manager"
 
 class Cluster::InstanceBuilder
   private getter settings : Configuration::Main
   private getter hetzner_client : Hetzner::Client
   private getter mutex : Mutex
-  private getter ssh_key : Hetzner::SSHKey
+  private getter ssh_key : Hetzner::SSHKey?
   private getter network : Hetzner::Network?
   private getter placement_groups : Cluster::PlacementGroupManager::PlacementGroups
 
@@ -17,7 +19,7 @@ class Cluster::InstanceBuilder
     "#{settings.cluster_name}-#{instance_type_part}#{prefix}#{index + 1}"
   end
 
-  def create_master_instance(index : Int32, location : String) : Hetzner::Instance::Create
+  def create_master_instance(index : Int32, location : String) : InstanceProvisioner
     masters_pool = settings.masters_pool
     legacy_instance_type = masters_pool.legacy_instance_type
     instance_type = masters_pool.instance_type
@@ -32,6 +34,21 @@ class Cluster::InstanceBuilder
     grow_root_partition_automatically = masters_pool.effective_grow_root_partition_automatically(settings.grow_root_partition_automatically)
     placement_group = master_placement_group(index)
 
+    if existing_server_id = masters_pool.existing_server_ids[index]?
+      return Hetzner::Instance::Adopt.new(
+        settings: settings,
+        hetzner_client: hetzner_client,
+        instance_id: existing_server_id,
+        instance_name: instance_name,
+        instance_type: instance_type,
+        location: location,
+        role: "master",
+        network: network,
+        additional_packages: additional_packages,
+        additional_pre_k3s_commands: additional_pre_k3s_commands
+      )
+    end
+
     Hetzner::Instance::Create.new(
       settings: settings,
       hetzner_client: hetzner_client,
@@ -40,7 +57,7 @@ class Cluster::InstanceBuilder
       instance_name: instance_name,
       instance_type: instance_type,
       image: image,
-      ssh_key: ssh_key,
+      ssh_key: ssh_key.not_nil!,
       network: network,
       additional_packages: additional_packages,
       additional_pre_k3s_commands: additional_pre_k3s_commands,
@@ -51,7 +68,7 @@ class Cluster::InstanceBuilder
     )
   end
 
-  def create_worker_instance(index : Int32, node_pool) : Hetzner::Instance::Create
+  def create_worker_instance(index : Int32, node_pool) : InstanceProvisioner
     legacy_instance_type = node_pool.legacy_instance_type
     instance_type = node_pool.instance_type
 
@@ -65,6 +82,21 @@ class Cluster::InstanceBuilder
     grow_root_partition_automatically = node_pool.effective_grow_root_partition_automatically(settings.grow_root_partition_automatically)
     placement_group = worker_placement_group(index, node_pool)
 
+    if existing_server_id = node_pool.existing_server_ids[index]?
+      return Hetzner::Instance::Adopt.new(
+        settings: settings,
+        hetzner_client: hetzner_client,
+        instance_id: existing_server_id,
+        instance_name: instance_name,
+        instance_type: instance_type,
+        location: node_pool.location || default_masters_location,
+        role: "worker",
+        network: network,
+        additional_packages: additional_packages,
+        additional_pre_k3s_commands: additional_pre_k3s_commands
+      )
+    end
+
     Hetzner::Instance::Create.new(
       settings: settings,
       hetzner_client: hetzner_client,
@@ -74,7 +106,7 @@ class Cluster::InstanceBuilder
       instance_type: instance_type,
       image: image,
       location: node_pool.location || default_masters_location,
-      ssh_key: ssh_key,
+      ssh_key: ssh_key.not_nil!,
       network: network,
       additional_packages: additional_packages,
       additional_pre_k3s_commands: additional_pre_k3s_commands,
@@ -84,14 +116,14 @@ class Cluster::InstanceBuilder
     )
   end
 
-  def initialize_master_instances(masters_locations) : Array(Hetzner::Instance::Create)
-    Array(Hetzner::Instance::Create).new(settings.masters_pool.instance_count) do |i|
+  def initialize_master_instances(masters_locations) : Array(InstanceProvisioner)
+    Array(InstanceProvisioner).new(settings.masters_pool.instance_count) do |i|
       create_master_instance(i, masters_locations[i])
     end
   end
 
-  def initialize_worker_instances : Array(Hetzner::Instance::Create)
-    factories = Array(Hetzner::Instance::Create).new
+  def initialize_worker_instances : Array(InstanceProvisioner)
+    factories = Array(InstanceProvisioner).new
     static_worker_node_pools = settings.worker_node_pools.reject(&.autoscaling_enabled)
 
     static_worker_node_pools.each do |node_pool|
