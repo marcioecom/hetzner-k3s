@@ -56,6 +56,14 @@ class Configuration::Main
     external_robot_node_pools.any?
   end
 
+  def existing_server_ids : Array(Int64)
+    masters_pool.existing_server_ids + worker_node_pools.flat_map(&.existing_server_ids)
+  end
+
+  def adopted_servers? : Bool
+    existing_server_ids.any?
+  end
+
   def robot_credentials : NamedTuple(user: String, password: String)?
     pool = external_robot_node_pools.first?
     return nil unless pool

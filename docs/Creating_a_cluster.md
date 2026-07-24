@@ -121,6 +121,10 @@ masters_pool:
     - fsn1
     - hel1
     - nbg1
+  # existing_server_ids: # optional: adopt rebuilt Hetzner Cloud servers instead of creating them
+  #   - 12345601
+  #   - 12345602
+  #   - 12345603
 
 worker_node_pools:
 - name: small-static
@@ -226,6 +230,50 @@ Settings, such as `additional_packages`, `additional_pre_k3s_commands`, and `add
 - `additional_post_k3s_commands`: Commands executed after k3s is installed and configured
 
 For an example of using `additional_post_k3s_commands` to resize the root partition for use with storage solutions like Rook Ceph, see [Resizing root partition with additional post k3s commands](./Resizing_root_partition_with_post_create_commands.md).
+
+### Adopting existing Hetzner Cloud servers
+
+`existing_server_ids` lets a master or worker pool adopt clean, rebuilt Hetzner Cloud servers instead of creating new servers. Adopted servers remain normal Hetzner Cloud nodes, so private networking, the Cloud Controller Manager, CSI driver, Cloud Firewalls, and upgrades work as they do for servers created by hetzner-k3s.
+
+```yaml
+masters_pool:
+  instance_type: cx23
+  instance_count: 1
+  locations:
+    - nbg1
+  existing_server_ids:
+    - 12345601
+
+worker_node_pools:
+  - name: falkenstein
+    instance_type: cx23
+    instance_count: 1
+    location: fsn1
+    existing_server_ids:
+      - 12345602
+  - name: helsinki
+    instance_type: cx23
+    instance_count: 1
+    location: hel1
+    existing_server_ids:
+      - 12345603
+```
+
+For the initial adoption implementation, each adopted server must:
+
+- Run a clean Hetzner Ubuntu 24.04 rebuild.
+- Be running and have a public IPv4 address.
+- Accept public-key SSH as `root` on port `22` from the machine running hetzner-k3s.
+- Use `networking.ssh.port: 22`; custom SSH ports are not supported for adopted servers yet.
+- Match the pool's configured server type and location.
+- Not be attached to another private network.
+- Not contain k3s state or an unrelated active Tailscale installation.
+
+Remove manually attached Cloud Firewalls and private networks before adoption. hetzner-k3s renames the Cloud server and its OS hostname to the normal cluster naming convention, bootstraps the packages and SSH configuration normally supplied by cloud-init, registers Tailscale when enabled, attaches the configured private network, and adds the `cluster`, `role`, and `hetzner-k3s-adopted` Cloud labels.
+
+The number of `existing_server_ids` must equal `instance_count`. IDs must be unique across the cluster. A pool cannot mix created and adopted servers, and adopted IDs cannot be combined with external or autoscaled pools.
+
+Adopted servers are not added to placement groups. Cluster deletion is not implemented for adopted servers; `hetzner-k3s delete`, including `--force`, aborts before changing any resource when the configuration contains `existing_server_ids`.
 
 The `addons` section controls which components hetzner-k3s installs automatically:
 

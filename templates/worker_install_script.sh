@@ -13,9 +13,11 @@ if [ "{{ private_network_enabled }}" = "true" ]; then
   echo "Using Hetzner private network" >/var/log/hetzner-k3s.log
   SUBNET="{{ private_network_subnet }}"
 
-  # Wait for private network interface to be available
+  # Wait for the private network interface and its DHCP address to be available.
   MAX_ATTEMPTS=30
   DELAY=10
+  NETWORK_INTERFACE=""
+  PRIVATE_IP=""
 
   for i in $(seq 1 $MAX_ATTEMPTS); do
     # Simplified network interface detection.
@@ -31,31 +33,25 @@ if [ "{{ private_network_enabled }}" = "true" ]; then
     )
 
     if [ -n "$NETWORK_INTERFACE" ]; then
-      echo "Private network interface $NETWORK_INTERFACE found" 2>&1 | tee -a /var/log/hetzner-k3s.log
-      break
+      PRIVATE_IP=$(
+        ip -4 -o addr show dev "$NETWORK_INTERFACE" |
+          awk '{print $4}' |
+          cut -d'/' -f1 |
+          head -n1
+      )
+
+      if [ -n "$PRIVATE_IP" ]; then
+        echo "Private network interface $NETWORK_INTERFACE found with IP $PRIVATE_IP" 2>&1 | tee -a /var/log/hetzner-k3s.log
+        break
+      fi
     fi
 
-    echo "Waiting for private network interface in subnet $SUBNET... (Attempt $i/$MAX_ATTEMPTS)" 2>&1 | tee -a /var/log/hetzner-k3s.log
+    echo "Waiting for private network interface and IP in subnet $SUBNET... (Attempt $i/$MAX_ATTEMPTS)" 2>&1 | tee -a /var/log/hetzner-k3s.log
     sleep $DELAY
   done
 
-  # Check if we found the interface
-  if [ -z "$NETWORK_INTERFACE" ]; then
-    echo "ERROR: Timeout waiting for private network interface in subnet $SUBNET" 2>&1 | tee -a /var/log/hetzner-k3s.log
-    exit 1
-  fi
-
-  # Get private IP address
-  PRIVATE_IP=$(
-    ip -4 -o addr show dev "$NETWORK_INTERFACE" |
-      awk '{print $4}' |
-      cut -d'/' -f1 |
-      head -n1
-  )
-
-  # Verify we got a private IP
-  if [ -z "$PRIVATE_IP" ]; then
-    echo "ERROR: Could not determine private IP address for interface $NETWORK_INTERFACE" 2>&1 | tee -a /var/log/hetzner-k3s.log
+  if [ -z "$NETWORK_INTERFACE" ] || [ -z "$PRIVATE_IP" ]; then
+    echo "ERROR: Timeout waiting for private network interface and IP in subnet $SUBNET" 2>&1 | tee -a /var/log/hetzner-k3s.log
     exit 1
   fi
 

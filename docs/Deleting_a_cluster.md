@@ -1,5 +1,7 @@
 # Deleting a Cluster
 
+> **Adopted servers:** deletion is not currently supported when any pool defines `existing_server_ids`. The delete command aborts before changing resources, even with `--force`.
+
 ## Basic Deletion
 
 To delete a cluster, you need to run the following command:

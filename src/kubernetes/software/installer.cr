@@ -44,9 +44,8 @@ class Kubernetes::Software::Installer
   end
 
   private def install_cluster_autoscaler_if_enabled(first_master, masters, ssh, autoscaling_worker_node_pools)
-    if @settings.addons.cluster_autoscaler.enabled? && first_master
+    if @settings.addons.cluster_autoscaler.enabled? && first_master && autoscaling_worker_node_pools.any?
       Kubernetes::Software::ClusterAutoscaler.new(@configuration, @settings, masters, first_master, ssh, autoscaling_worker_node_pools).install
     end
   end
 end
-

@@ -23,6 +23,8 @@ class Configuration::Validators::NodePool
   def validate
     return unless pool
 
+    validate_existing_server_ids
+
     Configuration::Validators::NodePoolConfig::PoolName.new(errors, pool_type, pool_name).validate
     Configuration::Validators::NodePoolConfig::InstanceType.new(errors, pool, instance_types).validate
 
@@ -42,5 +44,16 @@ class Configuration::Validators::NodePool
 
   private def masters?
     pool_type == :masters
+  end
+
+  private def validate_existing_server_ids
+    ids = pool.existing_server_ids
+    return if ids.empty?
+
+    errors << "#{pool_description} must have one existing_server_id per instance (expected #{pool.instance_count}, got #{ids.size})" if ids.size != pool.instance_count
+    errors << "#{pool_description} has invalid existing_server_ids; IDs must be positive" if ids.any? { |id| id <= 0 }
+    errors << "#{pool_description} has duplicate existing_server_ids" if ids.uniq.size != ids.size
+    errors << "#{pool_description} cannot combine existing_server_ids with external nodes" if pool.external?
+    errors << "#{pool_description} cannot combine existing_server_ids with autoscaling" if pool.autoscaling_enabled
   end
 end

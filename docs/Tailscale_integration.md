@@ -56,4 +56,19 @@ With this setup, `kubectl` works from any machine connected to the tailnet, beca
 - Nodes are configured with `--accept-dns=false`, so their own DNS resolution is unchanged and does not depend on `tailscaled`. Only the machines you administer from need MagicDNS resolution.
 - Node registration adds a short delay to first boot. hetzner-k3s automatically waits longer for SSH when Tailscale is enabled.
 - **Cluster deletion does not remove nodes from your tailnet.** Remove stale machines from the [admin console](https://login.tailscale.com/admin/machines) after deleting a cluster. If you recreate a cluster with the same names while stale entries exist, Tailscale appends a numeric suffix to the new nodes' DNS names, which breaks Tailscale-based SSH access.
+- Before adopting rebuilt servers with `existing_server_ids`, remove stale machines with the same generated names from the Tailscale admin console. Adoption requires an exact MagicDNS match and rejects numeric suffixes.
 - IPv6-only nodes (no public IPv4) are not covered by this integration.
+
+## Public API fallback
+
+The generated kubeconfig uses the first master's Tailscale MagicDNS name when Tailscale is enabled. Kubernetes kubeconfigs do not support an ordered list of API endpoints, so fallback to the master's public IPv4 is manual.
+
+Keep your fixed public IP in `networking.allowed_networks.api`. If Tailscale is unavailable, back up the kubeconfig and replace the active cluster endpoint:
+
+```bash
+cp /path/to/kubeconfig /path/to/kubeconfig.tailscale-backup
+KUBECONFIG=/path/to/kubeconfig kubectl config set-cluster CLUSTER-MASTER-NAME \
+  --server=https://MASTER_PUBLIC_IPV4:6443
+```
+
+The API certificate includes each master's public IPv4 and Tailscale hostname. Restore the backup, or run the same command with the MagicDNS endpoint, after Tailscale access returns.
