@@ -29,8 +29,8 @@ if ! command -v tailscale >/dev/null 2>&1; then
   /usr/local/bin/install-tailscale.sh
 fi
 
-# Same join command as the cloud-init path: subnet routes are not accepted, and DNS is disabled in
-# the same call so tailscaled never rewrites /etc/resolv.conf between two commands.
+# Same join command as the cloud-init path. Subnet routes are not accepted and DNS is disabled in
+# the same call, so tailscaled never rewrites /etc/resolv.conf between two commands.
 if tailscale ip -4 >/dev/null 2>&1; then
   tailscale set --hostname='{{ instance_name }}' --accept-dns=false
 else

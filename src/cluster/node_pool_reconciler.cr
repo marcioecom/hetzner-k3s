@@ -48,8 +48,7 @@ class Cluster::NodePoolReconciler
 
     candidates = removable_nodes(documented_names)
 
-    # Adopted servers are never deleted by this tool, but leaving them out silently would look like
-    # the reconciler missed them.
+    # Logged so a skipped adopted server does not look like one the reconciler missed.
     adopted = adopted_instance_names.reject { |name| documented_names.includes?(name) }
     log_line "Not removing adopted server(s), delete them by hand: #{adopted.join(", ")}" unless adopted.empty?
 
@@ -162,8 +161,7 @@ class Cluster::NodePoolReconciler
     instances.select { |instance| instance[:autoscaled] }.map { |instance| instance[:name] }
   end
 
-  # An adopted server is somebody's existing machine, so it is never a removal candidate even when
-  # its pool left the configuration.
+  # Not ours to delete, even when the pool is gone from the configuration.
   private def adopted_instance_names : Array(String)
     instances.select { |instance| instance[:adopted] }.map { |instance| instance[:name] }
   end

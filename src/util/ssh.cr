@@ -107,8 +107,8 @@ class Util::SSH
     )
   end
 
-  # Run a command on a remote instance via SSH. `stdin` feeds the remote command, so a script can be
-  # sent without its contents, and any secret in it, appearing on the ssh command line.
+  # `stdin` feeds the remote command, so a script can be sent without its contents, and any secret
+  # in it, appearing on the ssh command line.
   def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false, stdin : String? = nil)
     host = resolve_host(instance)
 

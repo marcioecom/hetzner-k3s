@@ -1,6 +1,6 @@
 # Deleting a Cluster
 
-> **Adopted servers:** deletion is not currently supported when any pool defines `existing_server_ids`. The delete command aborts before changing resources, even with `--force`.
+> **Adopted servers:** deletion is not supported while any pool defines `existing_server_ids`, or while the Cloud servers still carry the `hetzner-k3s-adoption-cluster` label. The delete command aborts before changing resources, even with `--force`.
 
 ## Basic Deletion
 

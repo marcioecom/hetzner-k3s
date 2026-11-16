@@ -80,9 +80,9 @@ With this setup, `kubectl` works from any machine connected to the tailnet, beca
 
 ## Public API fallback
 
-The generated kubeconfig uses the first master's Tailscale MagicDNS name when Tailscale is enabled. Kubernetes kubeconfigs do not support an ordered list of API endpoints, so fallback to the master's public IPv4 is manual.
+The generated kubeconfig uses the first master's Tailscale MagicDNS name when Tailscale is enabled. Kubernetes kubeconfigs cannot hold an ordered list of API endpoints, so switching to the master's public IPv4 is a manual step.
 
-Keep your fixed public IP in `networking.allowed_networks.api`. If Tailscale is unavailable, back up the kubeconfig and replace the active cluster endpoint:
+With the private network enabled, keep your fixed public IP in `networking.allowed_networks.api`. Without the private network, the Cloud Firewall opens 6443 to the internet whatever that setting says. If Tailscale is unavailable, back up the kubeconfig and replace the active cluster endpoint:
 
 ```bash
 cp /path/to/kubeconfig /path/to/kubeconfig.tailscale-backup

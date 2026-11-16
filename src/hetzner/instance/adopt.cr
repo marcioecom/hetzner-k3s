@@ -17,8 +17,8 @@ class Hetzner::Instance::Adopt
   BOOTSTRAP_SCRIPT       = {{ read_file("#{__DIR__}/../../../templates/adopted_instance_bootstrap.sh") }}
   CLOUD_INIT_WAIT_SCRIPT = {{ read_file("#{__DIR__}/../../../templates/cloud_init_wait_script.sh") }}
 
-  # Templates, the Tailscale installer and the join command are shared with the cloud-init path so
-  # an adopted node cannot drift from a created one.
+  # Templates and the Tailscale installer come from the cloud-init path so an adopted node cannot
+  # drift from a created one.
   TAILSCALE_INSTALL_SCRIPT = Hetzner::Instance::CloudInitGenerator::TAILSCALE_INSTALL_SCRIPT
   SSH_CONFIGURATION_SCRIPT = Hetzner::Instance::CloudInitGenerator::SSH_CONFIGURATION_SCRIPT
   SSH_LISTEN_CONFIGURATION = Hetzner::Instance::CloudInitGenerator::SSH_LISTEN_CONF
@@ -76,8 +76,8 @@ class Hetzner::Instance::Adopt
     validate_clean_host(instance)
     validate_cluster_label(instance)
 
-    # Logged and labelled before the first write: from here on the server is renamed, so it must
-    # never be mistaken for a server this tool created.
+    # Before the first write: the log has to show the name and IP the server had before it was
+    # renamed.
     log_line "Adopting server #{instance.id}, currently '#{instance.name}' (#{instance.public_ip_address}), as '#{instance_name}'",
       log_prefix: default_log_prefix
     mark_adoption(instance)
@@ -88,7 +88,7 @@ class Hetzner::Instance::Adopt
     run_bootstrap(instance)
     capture_tailscale_ip(instance)
 
-    # Attach before waiting for cluster SSH: with use_private_ip the wait has to prove the path the
+    # Attach before waiting for cluster SSH. With use_private_ip the wait has to prove the path the
     # installer will use, which is the address the attach just added.
     attach_to_network(instance)
     instance = find_instance
@@ -151,7 +151,7 @@ class Hetzner::Instance::Adopt
   end
 
   private def wait_for_cloud_init(instance) : Nil
-    # A rebuilt server can refuse SSH for a few seconds, so retry the connection first; the wait
+    # A rebuilt server can refuse SSH for a few seconds, so retry the connection first. The wait
     # script then keeps its own five minute budget for cloud-init itself.
     bootstrap_ssh.wait_for_instance(instance, 22, settings.networking.ssh.use_agent, "echo ready", "ready")
     bootstrap_ssh.run(instance, 22, CLOUD_INIT_WAIT_SCRIPT, settings.networking.ssh.use_agent, print_output: false)
@@ -195,7 +195,8 @@ class Hetzner::Instance::Adopt
     self.resuming = result == "resuming"
     raise "Cannot adopt Hetzner server #{@instance_id}: host preflight failed (#{result})" unless result == "ready" || resuming
   rescue ex : IO::Error
-    # The reasons are printed to stderr, so the message carries them instead of ending in a colon.
+    # The preflight reasons go to stderr, so repeat them in the error instead of ending it with a
+    # colon.
     raise "Cannot adopt Hetzner server #{@instance_id}: #{ex.message}"
   end
 

@@ -47,7 +47,6 @@ private def adopt_probe(tailscale = true) : AdoptProbe
   )
 end
 
-# The script embeds the Tailscale installer as base64, so the assertions have to read it back.
 private def embedded_installer(script : String) : String
   line = script.lines.find! { |candidate| candidate.includes?("base64 -d") && candidate.includes?("install-tailscale.sh") }
   # The line quotes the format string first and the payload second.

@@ -31,7 +31,7 @@ class Cluster::Create
   private getter worker_instances : Array(InstanceProvisioner)
 
   private property kubernetes_masters_installation_queue_channel do
-    # One slot per master: all masters are queued before the installer fiber exists, so a fixed
+    # One slot per master. All masters are queued before the installer fiber exists, so a fixed
     # capacity smaller than the master count would block the last send forever.
     Channel(Hetzner::Instance).new(settings.masters_pool.instance_count)
   end
@@ -204,8 +204,8 @@ class Cluster::Create
   end
 
   # Waits for every factory and fails the whole create on the first error. The channel is sized to
-  # the number of factories so a failing fiber can never block on its own report, which would also
-  # skip the `ensure` that returns the semaphore slot.
+  # the number of factories so a failing fiber never blocks when it reports, which would also skip
+  # the `ensure` that returns the semaphore slot.
   private def create_instances_concurrently(instance_factories, kubernetes_installation_queue_channel) : Nil
     results = Channel(Exception?).new(instance_factories.size)
     semaphore = Channel(Nil).new(10)
