@@ -4,7 +4,7 @@ hetzner-k3s can install [Tailscale](https://tailscale.com) on every cluster node
 
 When enabled:
 
-1. Each node installs Tailscale in cloud-init and joins the tailnet as `<instance-name>.<hostname_suffix>` (MagicDNS name).
+1. Each node installs Tailscale during provisioning, in cloud-init for servers hetzner-k3s creates and in the adoption bootstrap for servers it adopts, and joins the tailnet as `<instance-name>.<hostname_suffix>` (MagicDNS name).
 2. All SSH connections made by hetzner-k3s itself (provisioning, upgrades, `run` commands) go through the tailnet instead of public or private IPs.
 3. The API server certificate gets a TLS SAN for each master's Tailscale hostname, and the generated kubeconfig points to `https://<first-master>.<hostname_suffix>:6443`.
 
@@ -41,7 +41,9 @@ Set `version` to install an exact package version. When it is empty, the reposit
 
 ### Auth key handling
 
-The key is written to `/run/tailscale-authkey` (mode `0600`, tmpfs) and deleted right after `tailscale up` runs. That keeps the window short, but it is **not** the only copy on the node: cloud-init keeps the complete user-data, key included, at `/var/lib/cloud/instance/user-data.txt` for the life of the instance, and the key also exists in your configuration file or environment and in the user-data sent to the Hetzner API.
+The key is written to `/run/tailscale-authkey` (mode `0600`, tmpfs) and deleted right after `tailscale up` runs. That keeps the window short, but on a created node it is **not** the only copy: cloud-init keeps the complete user-data, key included, at `/var/lib/cloud/instance/user-data.txt` for the life of the instance, and the key also exists in your configuration file or environment and in the user-data sent to the Hetzner API.
+
+Adopted servers do not go through cloud-init. Their bootstrap script, key included, is sent over the SSH connection on stdin and never appears on a command line, so `/run` is the only copy on the node apart from your own configuration.
 
 Treat the key as a long-lived credential: scope it with a tag and ACLs, and revoke or rotate it once the cluster exists rather than leaving a reusable key valid indefinitely.
 
@@ -75,14 +77,14 @@ With this setup, `kubectl` works from any machine connected to the tailnet, beca
 - Node registration adds a short delay to first boot. hetzner-k3s retries SSH for up to 5 minutes when Tailscale is enabled, because the node has to install the package and join the tailnet before SSH is reachable.
 - **External node pools are not covered.** External (generic SSH and Robot) nodes never run cloud-init, so hetzner-k3s keeps connecting to them over their configured host and IP. A cluster that mixes external pools with `tailscale.enabled: true` only routes the Hetzner-provisioned nodes over the tailnet.
 - **Cluster deletion does not remove nodes from your tailnet.** Remove stale machines from the [admin console](https://login.tailscale.com/admin/machines) after deleting a cluster. If you recreate a cluster with the same names while stale entries exist, Tailscale appends a numeric suffix to the new nodes' DNS names, which breaks Tailscale-based SSH access.
-- Before adopting rebuilt servers with `existing_server_ids`, remove stale machines with the same generated names from the Tailscale admin console. Adoption requires an exact MagicDNS match and rejects numeric suffixes.
+- Before adopting rebuilt servers with `existing_server_ids`, remove stale machines with the same generated names from the Tailscale admin console. Adoption only accepts an exact MagicDNS match, so a leftover entry makes the node wait out the SSH retry budget and fail with the hostname it was looking for.
 - IPv6-only nodes (no public IPv4) are not covered by this integration.
 
 ## Public API fallback
 
 The generated kubeconfig uses the first master's Tailscale MagicDNS name when Tailscale is enabled. Kubernetes kubeconfigs cannot hold an ordered list of API endpoints, so switching to the master's public IPv4 is a manual step.
 
-With the private network enabled, keep your fixed public IP in `networking.allowed_networks.api`. Without the private network, the Cloud Firewall opens 6443 to the internet whatever that setting says. If Tailscale is unavailable, back up the kubeconfig and replace the active cluster endpoint:
+Keep your fixed public IP in `networking.allowed_networks.api` so the API stays reachable on `6443` without Tailscale, subject to the caveats above. If Tailscale is unavailable, back up the kubeconfig and replace the active cluster endpoint:
 
 ```bash
 cp /path/to/kubeconfig /path/to/kubeconfig.tailscale-backup
