@@ -20,6 +20,10 @@ class Hetzner::Instance::Delete
 
     return handle_missing_instance unless instance
 
+    if instance.labels["hetzner-k3s-adopted"]? == "true" || instance.labels.has_key?("hetzner-k3s-adoption-cluster")
+      raise "Refusing to delete adopted Hetzner server #{instance.id} (#{instance.name})"
+    end
+
     log_line "Deleting instance #{instance_name}..."
     delete_instance(instance.id)
     log_line "...instance #{instance_name} deleted"

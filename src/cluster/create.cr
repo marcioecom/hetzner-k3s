@@ -27,11 +27,13 @@ class Cluster::Create
   private getter ssh_key : Hetzner::SSHKey
   private getter load_balancer : Hetzner::LoadBalancer?
   private getter instances : Array(Hetzner::Instance) = [] of Hetzner::Instance
-  private getter master_instances : Array(Hetzner::Instance::Create)
-  private getter worker_instances : Array(Hetzner::Instance::Create)
+  private getter master_instances : Array(InstanceProvisioner)
+  private getter worker_instances : Array(InstanceProvisioner)
 
   private property kubernetes_masters_installation_queue_channel do
-    Channel(Hetzner::Instance).new(5)
+    # One slot per master. All masters are queued before the installer fiber exists, so a fixed
+    # capacity smaller than the master count would block the last send forever.
+    Channel(Hetzner::Instance).new(settings.masters_pool.instance_count)
   end
   private property kubernetes_workers_installation_queue_channel do
     Channel(Hetzner::Instance).new(10)
@@ -54,10 +56,14 @@ class Cluster::Create
     @firewall_manager = FirewallManager.new(settings, hetzner_client)
     @placement_group_manager = PlacementGroupManager.new(settings, hetzner_client)
 
+    preflight_adopted_instances
+
     @network = network_manager.find_or_create if settings.networking.private_network.enabled
     @ssh_key = create_ssh_key
     static_worker_node_pools = settings.worker_node_pools.reject(&.autoscaling_enabled).reject(&.external?)
-    @placement_groups = placement_group_manager.create(settings.masters_pool.instance_count, static_worker_node_pools)
+    created_master_count = settings.masters_pool.adopted? ? 0 : settings.masters_pool.instance_count
+    created_worker_node_pools = static_worker_node_pools.reject(&.adopted?)
+    @placement_groups = placement_group_manager.create(created_master_count, created_worker_node_pools)
     @instance_builder = InstanceBuilder.new(settings, hetzner_client, mutex, ssh_key, network, placement_groups)
 
     @master_instances = instance_builder.initialize_master_instances(masters_locations)
@@ -65,7 +71,7 @@ class Cluster::Create
   end
 
   def run
-    create_instances_concurrently(master_instances, kubernetes_masters_installation_queue_channel, wait: true)
+    create_instances_concurrently(master_instances, kubernetes_masters_installation_queue_channel)
 
     @load_balancer = load_balancer_manager.handle(master_instances.size, network)
 
@@ -148,8 +154,8 @@ class Cluster::Create
     settings.masters_pool.locations
   end
 
-  private def create_worker_instances(node_pools) : Array(Hetzner::Instance::Create)
-    factories = Array(Hetzner::Instance::Create).new
+  private def create_worker_instances(node_pools) : Array(InstanceProvisioner)
+    factories = Array(InstanceProvisioner).new
 
     node_pools.each do |node_pool|
       node_pool.instance_count.times do |i|
@@ -160,33 +166,69 @@ class Cluster::Create
     factories
   end
 
-  private def handle_created_instance(created_instance, kubernetes_installation_queue_channel, wait_channel, instance_factory, wait)
-    return unless created_instance
+  private def preflight_adopted_instances : Nil
+    return unless settings.adopted_servers?
 
-    wait_channel.send(instance_factory) if wait
+    preflight_network = nil
+    if settings.networking.private_network.enabled
+      configured_name = settings.networking.private_network.existing_network_name
+      network_name = configured_name.empty? ? settings.cluster_name : configured_name
+      preflight_network = network_manager.find_existing(network_name)
+    end
+
+    builder = InstanceBuilder.new(
+      settings,
+      hetzner_client,
+      mutex,
+      nil,
+      preflight_network,
+      PlacementGroupManager::PlacementGroups.new
+    )
+
+    if settings.masters_pool.adopted?
+      settings.masters_pool.instance_count.times do |index|
+        builder.create_master_instance(index, masters_locations[index]).as(Hetzner::Instance::Adopt).preflight
+      end
+    end
+
+    settings.worker_node_pools.select(&.adopted?).each do |node_pool|
+      node_pool.instance_count.times do |index|
+        builder.create_worker_instance(index, node_pool).as(Hetzner::Instance::Adopt).preflight
+      end
+    end
+  end
+
+  private def handle_created_instance(created_instance, kubernetes_installation_queue_channel)
     instances << created_instance
     kubernetes_installation_queue_channel.send(created_instance)
   end
 
-  private def create_instances_concurrently(instance_factories, kubernetes_installation_queue_channel, wait = false)
-    wait_channel = Channel(Hetzner::Instance::Create).new
+  # Waits for every factory and fails the whole create on the first error. The channel is sized to
+  # the number of factories so a failing fiber never blocks when it reports, which would also skip
+  # the `ensure` that returns the semaphore slot.
+  private def create_instances_concurrently(instance_factories, kubernetes_installation_queue_channel) : Nil
+    results = Channel(Exception?).new(instance_factories.size)
     semaphore = Channel(Nil).new(10)
 
     instance_factories.each do |instance_factory|
       semaphore.send(nil)
       spawn do
         begin
-          created_instance = instance_factory.run
-          handle_created_instance(created_instance, kubernetes_installation_queue_channel, wait_channel, instance_factory, wait)
+          handle_created_instance(instance_factory.run, kubernetes_installation_queue_channel)
+          results.send(nil)
         rescue e : Exception
-          puts "Error creating instance: #{e.message}"
+          results.send(e)
         ensure
           semaphore.receive
         end
       end
     end
 
-    instance_factories.size.times { wait_channel.receive } if wait
+    errors = instance_factories.size.times.compact_map { results.receive }
+    return if errors.empty?
+
+    puts "Error creating instances: #{errors.first.message}".colorize(:red)
+    exit 1
   end
 
   private def master_created_instances : Array(Hetzner::Instance)

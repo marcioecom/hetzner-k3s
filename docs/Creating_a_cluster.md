@@ -128,6 +128,10 @@ masters_pool:
     - fsn1
     - hel1
     - nbg1
+  # existing_server_ids: # optional: adopt rebuilt Hetzner Cloud servers instead of creating them
+  #   - 12345601
+  #   - 12345602
+  #   - 12345603
 
 worker_node_pools:
 - name: small-static
@@ -306,6 +310,77 @@ Settings, such as `additional_packages`, `additional_pre_k3s_commands`, and `add
 - `additional_post_k3s_commands`: Commands executed after k3s is installed and configured
 
 For an example of using `additional_post_k3s_commands` to resize the root partition for use with storage solutions like Rook Ceph, see [Resizing root partition with additional post k3s commands](./Resizing_root_partition_with_post_create_commands.md).
+
+### Adopting existing Hetzner Cloud servers
+
+A pool normally creates its servers. With `existing_server_ids`, it adopts servers that already exist in your Hetzner Cloud project instead. Use it when the servers were rebuilt outside hetzner-k3s, for example to keep their IPs or to reuse capacity you already pay for.
+
+Adoption is set per pool and is all or nothing: the pool adopts every server in its list, or it creates its servers as usual. Existing behavior is unchanged when `existing_server_ids` is not set.
+
+```yaml
+masters_pool:
+  instance_type: cx23
+  instance_count: 1
+  locations:
+    - nbg1
+  existing_server_ids:
+    - 12345601
+
+worker_node_pools:
+  - name: falkenstein
+    instance_type: cx23
+    instance_count: 1
+    location: fsn1
+    existing_server_ids:
+      - 12345602
+  - name: helsinki
+    instance_type: cx23
+    instance_count: 1
+    location: hel1
+    existing_server_ids:
+      - 12345603
+```
+
+#### Requirements
+
+Each adopted server must:
+
+- Be a clean Hetzner Ubuntu 24.04 rebuild. Any other image is refused.
+- Be running and have a public IPv4 address.
+- Accept public-key SSH as `root` on port `22` from the machine running hetzner-k3s. `networking.ssh.port` must be `22`, because custom ports are not supported for adopted servers yet.
+- Match the pool's `instance_type` and `location`.
+- Not be attached to a private network other than the configured one.
+- Have no k3s state and no active Tailscale installation.
+- Have no Cloud Firewall attached. hetzner-k3s does not check this, and a firewall that closes port `22` breaks the bootstrap.
+
+#### What create does
+
+1. Checks every ID before creating any cluster resource, so a wrong ID fails without leaving a network, firewall and load balancer behind.
+2. Renames the Cloud server and its OS hostname to the cluster's naming convention, and adds the `cluster`, `role` and `hetzner-k3s-adopted` labels. Unrelated labels are kept.
+3. Bootstraps what cloud-init would otherwise supply: base packages, the SSH configuration, `/etc/k8s-resolv.conf` and, when Tailscale is enabled, the same pinned package and the same join flags as a created node.
+4. Attaches the configured private network, then waits for the interface and its DHCP address.
+5. Hands the node to the normal k3s installation, so it ends up in the same state as a server the tool created.
+
+#### Rules
+
+- `existing_server_ids` must contain exactly `instance_count` IDs, all positive and unique across the cluster.
+- A pool cannot mix created and adopted servers, and adopted IDs cannot be combined with external or autoscaled pools.
+- Adopted servers do not get placement groups.
+- `public_network.use_local_firewall` is rejected together with `existing_server_ids`, because adoption does not render the node level firewall and the node would run unfiltered. Use Cloud Firewalls or enable the private network.
+- Remove stale Tailscale machines with the generated hostnames first, because adoption waits for an exact peer match. See [Tailscale integration](./Tailscale_integration.md).
+
+#### Deletion and recovery
+
+`hetzner-k3s delete`, including `--force`, refuses to run while the configuration lists `existing_server_ids`, or while any server still carries the `hetzner-k3s-adoption-cluster` label. Nothing is changed when it refuses: the servers are yours to delete.
+
+If an adoption fails partway through, the server keeps the `hetzner-k3s-adopted` label written before the rename, so it stays protected from deletion. To hand it back, remove that label, and `hetzner-k3s-adoption-cluster` if it is present, in the Hetzner Cloud console or with:
+
+```bash
+hcloud server remove-label <server> hetzner-k3s-adopted
+hcloud server remove-label <server> hetzner-k3s-adoption-cluster
+```
+
+The server, and possibly its hostname, may already be renamed. Reset those by hand.
 
 The `addons` section controls which components hetzner-k3s installs automatically:
 

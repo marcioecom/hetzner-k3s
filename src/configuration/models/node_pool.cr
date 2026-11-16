@@ -22,9 +22,14 @@ abstract class Configuration::Models::NodePool
   property include_cluster_name_as_prefix : Bool = true
   property grow_root_partition_automatically : Bool? = nil
   property external : Configuration::Models::ExternalConfig?
+  property existing_server_ids : Array(Int64) = [] of Int64
 
   def external? : Bool
     instance_type == "external"
+  end
+
+  def adopted? : Bool
+    existing_server_ids.any?
   end
 
   getter autoscaling_enabled : Bool do

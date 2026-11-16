@@ -91,7 +91,7 @@ module RoutingSpec
   class RecordingSSH < Util::SSH
     getter commands = [] of String
 
-    def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false)
+    def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false, stdin : String? = nil)
       @commands << command
       ""
     end

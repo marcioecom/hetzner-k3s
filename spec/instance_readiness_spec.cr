@@ -39,7 +39,7 @@ private class FakeReadinessSSH < Util::SSH
     super("/nonexistent/key")
   end
 
-  def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false)
+  def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false, stdin : String? = nil)
     @calls += 1
     if failures > 0
       @failures -= 1
