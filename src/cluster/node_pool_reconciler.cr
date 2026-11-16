@@ -1,3 +1,5 @@
+require "set"
+
 require "../configuration/loader"
 require "../hetzner/client"
 require "../hetzner/instance/delete"
@@ -10,7 +12,8 @@ require "./node_detection"
 #
 # Opt-in through `reconcile_node_pools`, and destructive, so it asks before it touches anything:
 # outside a TTY, or when --force is given, it does not prompt; --dry-run stops after printing.
-# Masters, autoscaler managed nodes and anything the configuration still renders are left alone.
+# Masters, autoscaler managed nodes, adopted servers and anything the configuration still renders are
+# left alone.
 class Cluster::NodePoolReconciler
   include Cluster::NodeDetection
   include Util::Shell
@@ -27,7 +30,7 @@ class Cluster::NodePoolReconciler
 
   getter errors : Array(String) = [] of String
 
-  @instances : Array(NamedTuple(name: String, autoscaled: Bool))?
+  @instances : Array(NamedTuple(name: String, autoscaled: Bool, adopted: Bool))?
   @node_names : Array(String)?
 
   def initialize(
@@ -44,6 +47,12 @@ class Cluster::NodePoolReconciler
     return true unless settings.reconcile_node_pools
 
     candidates = removable_nodes(documented_names)
+
+    # Adopted servers are never deleted by this tool, but leaving them out silently would look like
+    # the reconciler missed them.
+    adopted = adopted_instance_names.reject { |name| documented_names.includes?(name) }
+    log_line "Not removing adopted server(s), delete them by hand: #{adopted.join(", ")}" unless adopted.empty?
+
     return true if candidates.empty?
 
     log_line "#{candidates.size} node(s) are no longer in the configuration:"
@@ -97,6 +106,7 @@ class Cluster::NodePoolReconciler
       expected_names.includes?(name) ||
         autoscaled_instance_names.includes?(name) ||
         autoscaled_node_name?(name) ||
+        adopted_instance_names.includes?(name) ||
         node_without_server?(name)
     end
 
@@ -152,7 +162,13 @@ class Cluster::NodePoolReconciler
     instances.select { |instance| instance[:autoscaled] }.map { |instance| instance[:name] }
   end
 
-  private def instances : Array(NamedTuple(name: String, autoscaled: Bool))
+  # An adopted server is somebody's existing machine, so it is never a removal candidate even when
+  # its pool left the configuration.
+  private def adopted_instance_names : Array(String)
+    instances.select { |instance| instance[:adopted] }.map { |instance| instance[:name] }
+  end
+
+  private def instances : Array(NamedTuple(name: String, autoscaled: Bool, adopted: Bool))
     @instances ||= fetch_instances
   end
 
@@ -171,10 +187,12 @@ class Cluster::NodePoolReconciler
   # the autoscaler sets only `hcloud/node-group` on them, which is why NodeDetection and
   # Cluster::Delete query those pools a second time. Without this the autoscaled set is always empty
   # and every autoscaled node looks removable.
-  private def fetch_instances : Array(NamedTuple(name: String, autoscaled: Bool))
+  private def fetch_instances : Array(NamedTuple(name: String, autoscaled: Bool, adopted: Bool))
     flags = {} of String => Bool
+    adopted = Set(String).new
 
     server_names("cluster=#{settings.cluster_name}").each { |name| flags[name] ||= false }
+    server_names("cluster=#{settings.cluster_name},hetzner-k3s-adopted=true").each { |name| adopted << name }
 
     settings.worker_node_pools.each do |pool|
       next unless pool.autoscaling_enabled
@@ -182,7 +200,7 @@ class Cluster::NodePoolReconciler
       server_names("hcloud/node-group=#{node_group_name(pool)}").each { |name| flags[name] = true }
     end
 
-    flags.map { |name, autoscaled| {name: name, autoscaled: autoscaled} }
+    flags.map { |name, autoscaled| {name: name, autoscaled: autoscaled, adopted: adopted.includes?(name)} }
   end
 
   private def server_names(label_selector : String) : Array(String)

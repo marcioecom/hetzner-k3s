@@ -313,7 +313,7 @@ For an example of using `additional_post_k3s_commands` to resize the root partit
 
 ### Adopting existing Hetzner Cloud servers
 
-`existing_server_ids` lets a master or worker pool adopt clean, rebuilt Hetzner Cloud servers instead of creating new servers. Adopted servers remain normal Hetzner Cloud nodes, so private networking, the Cloud Controller Manager, CSI driver, Cloud Firewalls, and upgrades work as they do for servers created by hetzner-k3s.
+`existing_server_ids` lets a master or worker pool adopt clean, rebuilt Hetzner Cloud servers instead of creating new servers. Adopted servers remain normal Hetzner Cloud nodes, so private networking, the Cloud Controller Manager, CSI driver, Cloud Firewalls, and upgrades work as they do for servers created by hetzner-k3s. The node-level firewall from `public_network.use_local_firewall` is not installed on adopted servers, so that combination is rejected during configuration validation; use Cloud Firewalls, or enable the private network.
 
 ```yaml
 masters_pool:
@@ -354,6 +354,8 @@ Remove manually attached Cloud Firewalls and private networks before adoption. h
 The number of `existing_server_ids` must equal `instance_count`. IDs must be unique across the cluster. A pool cannot mix created and adopted servers, and adopted IDs cannot be combined with external or autoscaled pools.
 
 Adopted servers are not added to placement groups. Cluster deletion is not implemented for adopted servers; `hetzner-k3s delete`, including `--force`, aborts before changing any resource when the configuration contains `existing_server_ids`.
+
+The `hetzner-k3s-adopted` label is written before the server is renamed, so an adoption that fails part way through still leaves the server protected from deletion. To hand it back, remove that label in the Hetzner Cloud console, or with `hcloud server remove-label <server> hetzner-k3s-adopted`; remove `hetzner-k3s-adoption-cluster` too if it is present. The tool may already have renamed the server and its hostname, so reset those by hand as well.
 
 The `addons` section controls which components hetzner-k3s installs automatically:
 

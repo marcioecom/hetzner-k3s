@@ -7,6 +7,7 @@ private class FakeNodesClient < Hetzner::Client
   getter pages = [] of String
   getter deleted_ids = [] of Int32
   property servers = [] of Array(Tuple(String, Bool))
+  property adopted_names = [] of String
 
   def initialize
     super("fake-token")
@@ -24,8 +25,17 @@ private class FakeNodesClient < Hetzner::Client
     @pages << page.to_s
 
     if selector = params[:label_selector]?
-      node_group_query = selector.to_s.starts_with?("hcloud/node-group=")
-      matches = all.select { |entry| entry[:autoscaled] == node_group_query && entry[:page] == page }
+      selector = selector.to_s
+      node_group_query = selector.starts_with?("hcloud/node-group=")
+      adopted_query = selector.includes?("hetzner-k3s-adopted=true")
+
+      matches =
+        if adopted_query
+          all.select { |entry| entry[:page] == page && adopted_names.includes?(entry[:name]) }
+        else
+          all.select { |entry| entry[:page] == page && entry[:autoscaled] == node_group_query }
+        end
+
       return {true, listing(matches, page + 1)}
     end
 
@@ -54,6 +64,7 @@ private class FakeNodesClient < Hetzner::Client
   private def listing(entries, next_page : Int32? = nil) : String
     servers = entries.map do |entry|
       labels = entry[:autoscaled] ? %({"hcloud/node-group": "pool"}) : "{}"
+      labels = labels.sub("{}", %({"hetzner-k3s-adopted": "true"})) if adopted_names.includes?(entry[:name])
       %({"id": #{entry[:id]}, "name": "#{entry[:name]}", "status": "running", "labels": #{labels}})
     end
 
@@ -156,6 +167,19 @@ describe "node pool reconciliation" do
       probe.ssh.calls.should contain("kubectl cordon routing-test-gone --request-timeout=30s 2>&1")
       probe.ssh.calls.any?(&.starts_with?("kubectl drain routing-test-gone --ignore-daemonsets")).should be_true
       probe.client.deleted_ids.size.should eq(1)
+    end
+  end
+
+  it "leaves an adopted server in place even when its pool left the configuration" do
+    with_reconciler(reconciler_config) do |probe|
+      probe.client.servers = [[{"routing-test-worker1", false}, {"routing-test-gone", false}]]
+      probe.client.adopted_names = ["routing-test-gone"]
+      probe.ssh.nodes = ["routing-test-worker1", "routing-test-gone"]
+
+      probe.run(["routing-test-worker1"]).should be_true
+
+      probe.ssh.calls.any?(&.starts_with?("kubectl drain")).should be_false
+      probe.client.deleted_ids.should be_empty
     end
   end
 

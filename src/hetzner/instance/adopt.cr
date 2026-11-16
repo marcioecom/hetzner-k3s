@@ -7,17 +7,21 @@ require "../../util/ssh"
 require "../client"
 require "../instance"
 require "../network"
+require "./cloud_init_generator"
 require "./find"
 require "./find_by_id"
 
 class Hetzner::Instance::Adopt
   include Util
 
-  BOOTSTRAP_SCRIPT            = {{ read_file("#{__DIR__}/../../../templates/adopted_instance_bootstrap.sh") }}
-  CLOUD_INIT_WAIT_SCRIPT      = {{ read_file("#{__DIR__}/../../../templates/cloud_init_wait_script.sh") }}
-  SSH_CONFIGURATION_SCRIPT    = {{ read_file("#{__DIR__}/../../../templates/ssh/configure_ssh.sh") }}
-  SSH_LISTEN_CONFIGURATION    = {{ read_file("#{__DIR__}/../../../templates/ssh/listen.conf") }}
-  TAILSCALE_SSH_WAIT_ATTEMPTS = 60
+  BOOTSTRAP_SCRIPT       = {{ read_file("#{__DIR__}/../../../templates/adopted_instance_bootstrap.sh") }}
+  CLOUD_INIT_WAIT_SCRIPT = {{ read_file("#{__DIR__}/../../../templates/cloud_init_wait_script.sh") }}
+
+  # Templates, the Tailscale installer and the join command are shared with the cloud-init path so
+  # an adopted node cannot drift from a created one.
+  TAILSCALE_INSTALL_SCRIPT = Hetzner::Instance::CloudInitGenerator::TAILSCALE_INSTALL_SCRIPT
+  SSH_CONFIGURATION_SCRIPT = Hetzner::Instance::CloudInitGenerator::SSH_CONFIGURATION_SCRIPT
+  SSH_LISTEN_CONFIGURATION = Hetzner::Instance::CloudInitGenerator::SSH_LISTEN_CONF
 
   getter instance_name : String
 
@@ -71,24 +75,29 @@ class Hetzner::Instance::Adopt
     validate_name_available(instance)
     validate_clean_host(instance)
     validate_cluster_label(instance)
-    mark_adoption(instance)
-    instance = find_instance
-    update_name(instance)
-    instance = find_instance
 
-    bootstrap_ssh.run(instance, 22, CLOUD_INIT_WAIT_SCRIPT, settings.networking.ssh.use_agent, print_output: false)
-    bootstrap_ssh.run(instance, 22, bootstrap_script, settings.networking.ssh.use_agent)
+    # Logged and labelled before the first write: from here on the server is renamed, so it must
+    # never be mistaken for a server this tool created.
+    log_line "Adopting server #{instance.id}, currently '#{instance.name}' (#{instance.public_ip_address}), as '#{instance_name}'",
+      log_prefix: default_log_prefix
+    mark_adoption(instance)
+    update_name(find_instance)
+
+    instance = find_instance
+    wait_for_cloud_init(instance)
+    run_bootstrap(instance)
     capture_tailscale_ip(instance)
 
-    instance.tailscale_ip = tailscale_ip
-    wait_for_cluster_ssh(instance)
+    # Attach before waiting for cluster SSH: with use_private_ip the wait has to prove the path the
+    # installer will use, which is the address the attach just added.
     attach_to_network(instance)
-    update_labels(find_instance)
-
     instance = find_instance
-    instance.adopted = true
     instance.selected_network_id = network.try(&.id)
     instance.tailscale_ip = tailscale_ip
+
+    wait_for_cluster_ssh(instance)
+    update_labels(instance)
+
     instance
   end
 
@@ -142,9 +151,16 @@ class Hetzner::Instance::Adopt
   end
 
   private def wait_for_cloud_init(instance) : Nil
+    # A rebuilt server can refuse SSH for a few seconds, so retry the connection first; the wait
+    # script then keeps its own five minute budget for cloud-init itself.
+    bootstrap_ssh.wait_for_instance(instance, 22, settings.networking.ssh.use_agent, "echo ready", "ready")
     bootstrap_ssh.run(instance, 22, CLOUD_INIT_WAIT_SCRIPT, settings.networking.ssh.use_agent, print_output: false)
   rescue ex : IO::Error
     raise "Cannot adopt Hetzner server #{@instance_id}: cloud-init did not finish: #{ex.message}"
+  end
+
+  private def run_bootstrap(instance) : Nil
+    bootstrap_ssh.run(instance, 22, "bash -s", settings.networking.ssh.use_agent, stdin: bootstrap_script)
   end
 
   private def validate_name_available(instance) : Nil
@@ -159,26 +175,27 @@ class Hetzner::Instance::Adopt
     command = <<-BASH
       set -e
       . /etc/os-release
-      [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "24.04" ] || { echo unsupported-os; exit 1; }
+      [ "$ID" = "ubuntu" ] && [ "$VERSION_ID" = "24.04" ] || { echo unsupported-os >&2; exit 1; }
       if [ -f /etc/hetzner-k3s-adoption ]; then
-        [ "$(cat /etc/hetzner-k3s-adoption)" = "#{marker}" ] || { echo conflicting-adoption; exit 1; }
+        [ "$(cat /etc/hetzner-k3s-adoption)" = "#{marker}" ] || { echo conflicting-adoption >&2; exit 1; }
         echo resuming
         exit 0
       fi
-      [ ! -e /etc/initialized ] || { echo initialized; exit 1; }
-      [ ! -d /etc/rancher/k3s ] || { echo existing-k3s; exit 1; }
-      [ ! -d /var/lib/rancher/k3s ] || { echo existing-k3s; exit 1; }
-      ! systemctl is-active --quiet k3s 2>/dev/null || { echo existing-k3s; exit 1; }
-      ! systemctl is-active --quiet k3s-agent 2>/dev/null || { echo existing-k3s; exit 1; }
-      ! systemctl is-active --quiet tailscaled 2>/dev/null || { echo existing-tailscale; exit 1; }
+      [ ! -e /etc/initialized ] || { echo initialized >&2; exit 1; }
+      [ ! -d /etc/rancher/k3s ] || { echo existing-k3s >&2; exit 1; }
+      [ ! -d /var/lib/rancher/k3s ] || { echo existing-k3s >&2; exit 1; }
+      ! systemctl is-active --quiet k3s 2>/dev/null || { echo existing-k3s >&2; exit 1; }
+      ! systemctl is-active --quiet k3s-agent 2>/dev/null || { echo existing-k3s >&2; exit 1; }
+      ! systemctl is-active --quiet tailscaled 2>/dev/null || { echo existing-tailscale >&2; exit 1; }
       echo ready
       BASH
 
     output = bootstrap_ssh.run(instance, 22, command, settings.networking.ssh.use_agent, print_output: false)
     result = output.strip
     self.resuming = result == "resuming"
-    raise "Cannot adopt Hetzner server #{@instance_id}: host preflight failed" unless result == "ready" || resuming
+    raise "Cannot adopt Hetzner server #{@instance_id}: host preflight failed (#{result})" unless result == "ready" || resuming
   rescue ex : IO::Error
+    # The reasons are printed to stderr, so the message carries them instead of ending in a colon.
     raise "Cannot adopt Hetzner server #{@instance_id}: #{ex.message}"
   end
 
@@ -190,12 +207,11 @@ class Hetzner::Instance::Adopt
     raise "Cannot adopt Hetzner server #{@instance_id}: remove its existing cluster label before adoption"
   end
 
+  # Only the "this server was adopted" marker is written before the work. The cluster reservation
+  # label is written at the end with the rest, so an adoption that fails early does not lock the
+  # server out of another cluster.
   private def mark_adoption(instance) : Nil
-    labels = instance.labels.merge({
-      "hetzner-k3s-adopted"          => "true",
-      "hetzner-k3s-adoption-cluster" => settings.cluster_name,
-    })
-    update_instance_labels(instance, labels, "mark adoption of")
+    update_instance_labels(instance, instance.labels.merge({"hetzner-k3s-adopted" => "true"}), "mark adoption of")
   end
 
   private def update_name(instance) : Nil
@@ -242,7 +258,7 @@ class Hetzner::Instance::Adopt
   end
 
   private def wait_for_cluster_ssh(instance) : Nil
-    attempts = settings.networking.tailscale.enabled ? TAILSCALE_SSH_WAIT_ATTEMPTS : Util::SSH::DEFAULT_MAX_ATTEMPTS
+    attempts = settings.networking.tailscale.enabled ? Util::SSH::TAILSCALE_MAX_ATTEMPTS : Util::SSH::DEFAULT_MAX_ATTEMPTS
     cluster_ssh.wait_for_instance(
       instance,
       settings.networking.ssh.port,
@@ -261,6 +277,9 @@ class Hetzner::Instance::Adopt
     ssh_listen_configuration = Crinja.render(SSH_LISTEN_CONFIGURATION, {
       ssh_port: settings.networking.ssh.port,
     })
+    tailscale_install_script = Crinja.render(TAILSCALE_INSTALL_SCRIPT, {
+      tailscale_version: settings.networking.tailscale.version,
+    })
 
     Crinja.render(BOOTSTRAP_SCRIPT, {
       adoption_marker:                 adoption_marker,
@@ -269,6 +288,7 @@ class Hetzner::Instance::Adopt
       additional_pre_k3s_commands:     additional_pre_k3s_commands.join("\n"),
       tailscale_enabled:               settings.networking.tailscale.enabled,
       tailscale_auth_key_base64:       Base64.strict_encode(settings.networking.tailscale.auth_key),
+      tailscale_install_script_base64: Base64.strict_encode(tailscale_install_script),
       ssh_configuration_base64:        Base64.strict_encode(ssh_script),
       ssh_listen_configuration_base64: Base64.strict_encode(ssh_listen_configuration),
     })

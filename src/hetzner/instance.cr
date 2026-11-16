@@ -17,9 +17,6 @@ class Hetzner::Instance
   property labels : Hash(String, String) = {} of String => String
 
   @[JSON::Field(ignore: true)]
-  property adopted : Bool = false
-
-  @[JSON::Field(ignore: true)]
   property selected_network_id : Int64?
 
   @[JSON::Field(ignore: true)]

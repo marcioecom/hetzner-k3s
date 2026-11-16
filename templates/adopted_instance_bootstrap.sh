@@ -14,28 +14,33 @@ fi
 hostnamectl set-hostname '{{ instance_name }}'
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq {{ packages }}
+apt-get -o DPkg::Lock::Timeout=300 update -qq
+apt-get install -y -qq -o DPkg::Lock::Timeout=300 {{ packages }}
 
 printf 'nameserver 8.8.8.8\n' > /etc/k8s-resolv.conf
 
 {{ additional_pre_k3s_commands }}
 
 {% if tailscale_enabled %}
-trap 'rm -f /run/tailscale-authkey' EXIT
+printf '%s' '{{ tailscale_install_script_base64 }}' | base64 -d > /usr/local/bin/install-tailscale.sh
+chmod 0755 /usr/local/bin/install-tailscale.sh
+
 if ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh
+  /usr/local/bin/install-tailscale.sh
 fi
+
+# Same join command as the cloud-init path: subnet routes are not accepted, and DNS is disabled in
+# the same call so tailscaled never rewrites /etc/resolv.conf between two commands.
 if tailscale ip -4 >/dev/null 2>&1; then
-  tailscale set --hostname='{{ instance_name }}' --accept-routes
+  tailscale set --hostname='{{ instance_name }}' --accept-dns=false
 else
+  trap 'rm -f /run/tailscale-authkey' EXIT
   printf '%s' '{{ tailscale_auth_key_base64 }}' | base64 -d > /run/tailscale-authkey
   chmod 0600 /run/tailscale-authkey
-  tailscale up --authkey="$(cat /run/tailscale-authkey)" --hostname='{{ instance_name }}' --accept-routes
+  tailscale up --authkey="$(cat /run/tailscale-authkey)" --hostname='{{ instance_name }}' --accept-dns=false
   rm -f /run/tailscale-authkey
+  trap - EXIT
 fi
-trap - EXIT
-tailscale set --accept-dns=false
 {% endif %}
 
 printf '%s' '{{ ssh_configuration_base64 }}' | base64 -d > /etc/configure_ssh.sh

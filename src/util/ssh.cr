@@ -15,6 +15,9 @@ class Util::SSH
   DEFAULT_COMMAND_TIMEOUT = 30
   # Default number of retry attempts
   DEFAULT_MAX_ATTEMPTS = 20
+  # A node that still has to install Tailscale and register with the tailnet before SSH works takes
+  # longer than a normal cold boot.
+  TAILSCALE_MAX_ATTEMPTS = 60
   # Default delay between retries in seconds
   DEFAULT_RETRY_DELAY = 5
 
@@ -104,8 +107,9 @@ class Util::SSH
     )
   end
 
-  # Run a command on a remote instance via SSH
-  def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false)
+  # Run a command on a remote instance via SSH. `stdin` feeds the remote command, so a script can be
+  # sent without its contents, and any secret in it, appearing on the ssh command line.
+  def run(instance, port, command, use_ssh_agent, print_output = true, disable_log_prefix = false, capture_output = false, stdin : String? = nil)
     host = resolve_host(instance)
 
     debug = ENV.fetch("DEBUG", "false") == "true"
@@ -135,6 +139,7 @@ class Util::SSH
     # Run the SSH command
     status = Process.run("ssh",
       args: ssh_args,
+      input: stdin ? IO::Memory.new(stdin) : Process::Redirect::Close,
       output: output_streams[:out],
       error: output_streams[:err]
     )

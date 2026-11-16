@@ -90,6 +90,11 @@ class Configuration::Validators::CreateSettings
     if existing_server_ids.any? && settings.networking.ssh.port != 22
       errors << "Adopted servers currently require networking.ssh.port to be 22"
     end
+    # shortcut: adopted servers do not render the local firewall script, so reject the combination
+    # instead of leaving the node unfiltered. Add support if someone needs it.
+    if existing_server_ids.any? && settings.networking.public_network.use_local_firewall && !settings.networking.private_network.enabled
+      errors << "Adopted servers do not support public_network.use_local_firewall; set it to false or enable the private network"
+    end
 
     Configuration::Validators::KubectlPresence.new(errors).validate
 

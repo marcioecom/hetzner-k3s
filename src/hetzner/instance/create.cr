@@ -23,10 +23,6 @@ class Hetzner::Instance::Create
   READINESS_TIMEOUT     = 20.minutes
   READINESS_POLL        = 10.seconds
 
-  # Nodes take longer to become reachable via SSH when they first need to
-  # install Tailscale and register with the tailnet during cloud-init.
-  TAILSCALE_SSH_WAIT_ATTEMPTS = 60
-
   getter instance_name : String
 
   # Bounds and pacing, exposed so specs do not have to wait minutes.
@@ -195,7 +191,7 @@ class Hetzner::Instance::Create
   end
 
   private def ssh_wait_attempts
-    settings.networking.tailscale.enabled ? TAILSCALE_SSH_WAIT_ATTEMPTS : Util::SSH::DEFAULT_MAX_ATTEMPTS
+    settings.networking.tailscale.enabled ? Util::SSH::TAILSCALE_MAX_ATTEMPTS : Util::SSH::DEFAULT_MAX_ATTEMPTS
   end
 
   private def needs_powering_on?(instance)

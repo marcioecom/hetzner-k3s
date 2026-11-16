@@ -33,6 +33,9 @@ class Cluster::Delete
   def run
     if settings.adopted_servers? || adopted_servers_exist?
       STDERR.puts "Deletion is not supported for clusters containing adopted Hetzner servers. No resources were changed."
+      STDERR.puts "If an adoption was interrupted and the server is no longer in use, remove its labels in the Hetzner console:"
+      STDERR.puts "  hcloud server remove-label <server> hetzner-k3s-adopted"
+      STDERR.puts "  hcloud server remove-label <server> hetzner-k3s-adoption-cluster"
       exit 1
     end
 
@@ -76,10 +79,6 @@ class Cluster::Delete
   end
 
   private def delete_resources
-    if settings.adopted_servers? || adopted_servers_exist?
-      raise "Deletion is not supported for clusters containing adopted Hetzner servers. No resources were changed."
-    end
-
     switch_to_context("#{settings.cluster_name}-master1", abort_on_error: false, request_timeout: 10, print_output: false)
 
     cleanup_external_nodes

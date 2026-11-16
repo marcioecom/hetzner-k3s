@@ -31,6 +31,8 @@ class Cluster::Create
   private getter worker_instances : Array(InstanceProvisioner)
 
   private property kubernetes_masters_installation_queue_channel do
+    # One slot per master: all masters are queued before the installer fiber exists, so a fixed
+    # capacity smaller than the master count would block the last send forever.
     Channel(Hetzner::Instance).new(settings.masters_pool.instance_count)
   end
   private property kubernetes_workers_installation_queue_channel do
@@ -69,7 +71,7 @@ class Cluster::Create
   end
 
   def run
-    create_instances_concurrently(master_instances, kubernetes_masters_installation_queue_channel, wait: true)
+    create_instances_concurrently(master_instances, kubernetes_masters_installation_queue_channel)
 
     @load_balancer = load_balancer_manager.handle(master_instances.size, network)
 
@@ -197,40 +199,36 @@ class Cluster::Create
   end
 
   private def handle_created_instance(created_instance, kubernetes_installation_queue_channel)
-    return unless created_instance
-
     instances << created_instance
     kubernetes_installation_queue_channel.send(created_instance)
   end
 
-  private def create_instances_concurrently(instance_factories, kubernetes_installation_queue_channel, wait = false)
-    result_channel = Channel(Exception?).new
+  # Waits for every factory and fails the whole create on the first error. The channel is sized to
+  # the number of factories so a failing fiber can never block on its own report, which would also
+  # skip the `ensure` that returns the semaphore slot.
+  private def create_instances_concurrently(instance_factories, kubernetes_installation_queue_channel) : Nil
+    results = Channel(Exception?).new(instance_factories.size)
     semaphore = Channel(Nil).new(10)
 
     instance_factories.each do |instance_factory|
       semaphore.send(nil)
       spawn do
         begin
-          created_instance = instance_factory.run
-          handle_created_instance(created_instance, kubernetes_installation_queue_channel)
-          result_channel.send(nil) if wait
+          handle_created_instance(instance_factory.run, kubernetes_installation_queue_channel)
+          results.send(nil)
         rescue e : Exception
-          puts "Error creating instance: #{e.message}"
-          if wait
-            result_channel.send(e)
-          else
-            completed_channel.send(e)
-          end
+          results.send(e)
         ensure
           semaphore.receive
         end
       end
     end
 
-    if wait
-      errors = instance_factories.size.times.compact_map { result_channel.receive }
-      raise errors.first unless errors.empty?
-    end
+    errors = instance_factories.size.times.compact_map { results.receive }
+    return if errors.empty?
+
+    puts "Error creating instances: #{errors.first.message}".colorize(:red)
+    exit 1
   end
 
   private def master_created_instances : Array(Hetzner::Instance)
